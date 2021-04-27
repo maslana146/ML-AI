@@ -17,7 +17,7 @@
 # 
 # 
 
-# In[205]:
+# In[1]:
 
 
 import pandas as pd
@@ -40,9 +40,10 @@ from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from optbinning import BinningProcess
 from sklearn.preprocessing import OneHotEncoder,StandardScaler,Normalizer
+from sklearn.decomposition import PCA
 
 
-# In[30]:
+# In[2]:
 
 
 def load_data(zip_fn):
@@ -51,13 +52,13 @@ def load_data(zip_fn):
     return [pd.read_csv(zf.open(filename)) for filename in filenames]
 
 
-# In[176]:
+# In[3]:
 
 
 demographics_dictionary,test,test_bureau,train,train_bureau =load_data('data.zip')
 
 
-# In[177]:
+# In[4]:
 
 
 train = train.drop_duplicates()
@@ -70,29 +71,10 @@ del train_bureau,test_bureau,train,test
 gc.collect()
 
 
-# In[178]:
-
-
-cat_attr = ['Frequency','InstlmentMode','LoanStatus','PaymentMode','BranchID','Area','ManufacturerID','SupplierID','SEX','City','State','ZiPCODE','Maturity_year','Disbursal_year','Auth_year','Top-up Month']
-
-
-# In[201]:
-
-
-high_cardinality_cat_attr = ['BranchID','Area','SupplierID','City','ZiPCODE']
-cat_attr = list(set(cat_attr) - set(high_cardinality_cat_attr))
-
-
-# In[179]:
-
-
-num_attr = list(set(df.columns) - set(cat_attr) - set(date_attr) - set(['AuthDate','DisbursalDate','MaturityDAte','AssetID','ID']))
-
-
 # Let's do some magic with cyclical features. The explanation with some deeper insight can be found in <a href="http://blog.davidkaleko.com/feature-engineering-cyclical-features.html">here</a>
 # .
 
-# In[180]:
+# In[5]:
 
 
 date_attr = ['AuthDate','DisbursalDate','MaturityDAte']
@@ -108,7 +90,26 @@ df['loan_period'] = (df['MaturityDAte'] - df['DisbursalDate']).dt.days
 df.drop(['AuthDate','DisbursalDate','MaturityDAte','AssetID'],axis=1,inplace=True)
 
 
-# In[181]:
+# Split columns into categories
+
+# In[6]:
+
+
+cat_attr = ['Frequency','InstlmentMode','LoanStatus','PaymentMode','ManufacturerID','SEX','State','Maturity_year','Disbursal_year','Auth_year']
+high_cardinality_cat_attr = ['BranchID','Area','SupplierID','City','ZiPCODE']
+cat_attr = list(set(cat_attr) - set(high_cardinality_cat_attr))
+num_attr = list(set(df.columns) - set(cat_attr) - set(date_attr)- set(high_cardinality_cat_attr) - set(['AuthDate','DisbursalDate','MaturityDAte','AssetID','ID','Top-up Month']))
+
+
+# df.columns == attributes + ID + Top-up Month
+
+# In[9]:
+
+
+assert len(cat_attr+high_cardinality_cat_attr+num_attr)+2 == df.columns.size
+
+
+# In[10]:
 
 
 def draw_plots_categorical(grouped_by,target,df,percentage_threshold):
@@ -121,7 +122,7 @@ def draw_plots_categorical(grouped_by,target,df,percentage_threshold):
     return get_plots_categorical(temp,grouped_by,target,percentage_threshold)
 
 
-# In[182]:
+# In[11]:
 
 
 def get_plots_categorical(temp,attribute,target,percentage_threshold):
@@ -153,7 +154,7 @@ def get_plots_categorical(temp,attribute,target,percentage_threshold):
 
 # The last attribute is the percentage threshold. I decided to plot categories which percentage of the occurance is higher than the threshold. The rest is combined to "other" category.
 
-# In[384]:
+# In[13]:
 
 
 class LabelCombiner(BaseEstimator, TransformerMixin):
@@ -173,7 +174,7 @@ class LabelCombiner(BaseEstimator, TransformerMixin):
         return X
 
 
-# In[385]:
+# In[14]:
 
 
 class SkewnessFixer(BaseEstimator, TransformerMixin):
@@ -193,7 +194,8 @@ class SkewnessFixer(BaseEstimator, TransformerMixin):
                     if skewness > self.threshold:
                         skew_features.append(i)
         for i in skew_features:
-            X[:,i] = boxcox1p(X[:,i], boxcox_normmax(X[:,i] + 1))
+            if min(X[:,i]) > 0:
+                X[:,i] = boxcox1p(X[:,i], boxcox_normmax(X[:,i] + 1))
         return X
 
 
@@ -201,13 +203,13 @@ class SkewnessFixer(BaseEstimator, TransformerMixin):
 # * drop attributes with high cardinality to prevent negative impact on future models
 # * encode attributes by dummy encoding and hoping that it will somehow work
 
-# In[387]:
+# In[15]:
 
 
 encoder = wrapper.PolynomialWrapper(target_encoder.TargetEncoder())
 
 
-# In[388]:
+# In[16]:
 
 
 num_pipeline = Pipeline([
@@ -218,7 +220,7 @@ num_pipeline = Pipeline([
             ])
 
 
-# In[389]:
+# In[17]:
 
 
 cat_pipeline = Pipeline([
@@ -228,33 +230,84 @@ cat_pipeline = Pipeline([
 ])
 
 
-# In[408]:
+# In[18]:
+
+
+high_card_cat = Pipeline([
+            ('imputer',SimpleImputer(strategy='most_frequent')),   
+            ("high_cardinality_cat",encoder)
+])
+
+
+# In[19]:
 
 
 preprocessing_pipeline =  ColumnTransformer([
             ("num", num_pipeline, num_attr),
             ("cat", cat_pipeline, cat_attr),
-            ("high_cardinality_cat",encoder, high_cardinality_cat_attr)
+            ("high_cardinality_cat",high_card_cat, high_cardinality_cat_attr)
             ])
 
 
-# In[409]:
+# In[62]:
 
 
 train = df[~df['Top-up Month'].isna()]
-train[[*cat_attr]] = train[[*cat_attr]].astype(str)
-X = train
+train.loc[:,cat_attr] = train.loc[:,cat_attr].astype(str)
+X = train.drop(columns = ["ID"])
 y = train[['Top-up Month']]
 
 
-# In[413]:
+# In[22]:
 
 
 train = preprocessing_pipeline.fit_transform(X,y)
 
 
-# In[417]:
+# In[41]:
 
 
-pd.DataFrame(train)
+pre_train = pd.DataFrame(train)
+
+
+# In[42]:
+
+
+bool_cols = [col for col in pre_train 
+             if np.isin(pre_train[col].dropna().unique(), [0, 1]).all()]
+num_cols = list(set(pre_train.columns)-set(bool_cols))
+
+
+# We can see that having 15 components in enough to describe all numerical columns
+
+# In[44]:
+
+
+pca = PCA().fit(pre_train[num_cols])
+x = np.cumsum(pca.explained_variance_ratio_)
+fig = px.line( y=x, x=list(range(len(x))))
+fig.update_layout(title='PCA algorithm',
+                   xaxis_title='number of components',
+                   yaxis_title='cumulative explained variance')
+fig.show()
+
+
+# In[45]:
+
+
+PCA_cols = PCA(n_components=15).fit_transform(pre_train[num_cols])
+pre_train.drop(columns = num_cols,inplace=True)
+pre_train = pd.concat([pre_train,pd.DataFrame(PCA_cols)],axis=1)
+
+
+# In[47]:
+
+
+pre_train
+
+
+# In[ ]:
+
+
+
 
